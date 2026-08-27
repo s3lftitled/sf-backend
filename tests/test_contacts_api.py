@@ -1,4 +1,6 @@
 BASE = "/api/v1/contacts"
+# 1x1 transparent GIF, the smallest thing that survives the data-URL validator.
+PHOTO = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
 
 def test_health(client):
@@ -139,6 +141,48 @@ def test_delete_contact(client, payload):
     assert client.delete(f"{BASE}/{contact_id}").status_code == 204
     assert client.get(f"{BASE}/{contact_id}").status_code == 404
     assert client.delete(f"{BASE}/{contact_id}").status_code == 404
+
+
+def test_create_contact_with_photo(client, payload):
+    response = client.post(BASE, json={**payload, "photo": PHOTO})
+    assert response.status_code == 201
+    assert response.json()["photo"] == PHOTO
+
+
+def test_photo_defaults_to_none(client, payload):
+    assert client.post(BASE, json=payload).json()["photo"] is None
+
+
+def test_create_rejects_non_image_photo(client, payload):
+    response = client.post(BASE, json={**payload, "photo": "data:application/pdf;base64,Zm9v"})
+    assert response.status_code == 422
+
+
+def test_create_rejects_oversized_photo(client, payload):
+    oversized = "data:image/png;base64," + "A" * (2 * 1024 * 1024)
+    response = client.post(BASE, json={**payload, "photo": oversized})
+    assert response.status_code == 422
+
+
+def test_put_without_photo_clears_it(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.put(f"{BASE}/{contact_id}", json=payload)
+    assert response.status_code == 200
+    assert response.json()["photo"] is None
+
+
+def test_patch_preserves_photo(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert response.status_code == 200
+    assert response.json()["photo"] == PHOTO
+
+
+def test_patch_can_remove_photo(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"photo": None})
+    assert response.status_code == 200
+    assert response.json()["photo"] is None
 
 
 def test_root_lists_entrypoints(client):

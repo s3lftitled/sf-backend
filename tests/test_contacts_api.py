@@ -263,6 +263,11 @@ def test_patch_with_empty_list_clears_them(client, payload):
     assert response.json()["addresses"] == []
 
 
+def test_new_contact_is_not_modified_before_it_is_created(client, payload):
+    created = client.post(BASE, json=payload).json()
+    assert created["updated_at"] >= created["created_at"]
+
+
 def test_address_only_patch_advances_updated_at(client, payload):
     created = client.post(BASE, json=payload).json()
     response = client.patch(

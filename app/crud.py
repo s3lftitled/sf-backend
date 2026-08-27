@@ -17,12 +17,20 @@ def _replace_addresses(contact: Contact, addresses: list[AddressCreate]) -> None
 
     Assigning the whole collection lets delete-orphan remove the rows that are
     no longer referenced, so a contact never accumulates addresses it dropped.
-
-    Touching only the children leaves the parent row clean, so SQLAlchemy would
-    emit no UPDATE and `onupdate` would never fire — but an address change is a
-    change to the contact, so the timestamp is advanced here.
     """
     contact.addresses = [Address(**address.model_dump()) for address in addresses]
+
+
+def _touch(contact: Contact) -> None:
+    """
+    Advance the last-modified timestamp after an edit.
+
+    Replacing only the addresses leaves the parent row clean, so SQLAlchemy
+    emits no UPDATE and `onupdate` never fires — but an address change is still
+    a change to the contact. Creation is left alone: the column default is
+    evaluated at INSERT, and sampling the clock earlier would date the edit
+    before the record exists.
+    """
     contact.updated_at = utcnow()
 
 
@@ -92,6 +100,7 @@ def replace_contact(db: Session, contact: Contact, payload: ContactReplace) -> C
     for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
     _replace_addresses(contact, payload.addresses)
+    _touch(contact)
     db.commit()
     db.refresh(contact)
     return contact
@@ -107,6 +116,7 @@ def update_contact(db: Session, contact: Contact, payload: ContactUpdate) -> Con
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
     if replaces_addresses:
         _replace_addresses(contact, payload.addresses or [])
+        _touch(contact)
     db.commit()
     db.refresh(contact)
     return contact

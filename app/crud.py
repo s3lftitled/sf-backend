@@ -1,14 +1,37 @@
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Contact
-from app.schemas import ContactCreate, ContactReplace, ContactUpdate
+from app.models import Address, Contact, utcnow
+from app.schemas import AddressCreate, ContactCreate, ContactReplace, ContactUpdate
 
 SORTABLE_FIELDS = ("id", "first_name", "last_name", "email", "company", "created_at", "updated_at")
 
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _replace_addresses(contact: Contact, addresses: list[AddressCreate]) -> None:
+    """
+    Swap in a fresh set of addresses.
+
+    Assigning the whole collection lets delete-orphan remove the rows that are
+    no longer referenced, so a contact never accumulates addresses it dropped.
+    """
+    contact.addresses = [Address(**address.model_dump()) for address in addresses]
+
+
+def _touch(contact: Contact) -> None:
+    """
+    Advance the last-modified timestamp after an edit.
+
+    Replacing only the addresses leaves the parent row clean, so SQLAlchemy
+    emits no UPDATE and `onupdate` never fires — but an address change is still
+    a change to the contact. Creation is left alone: the column default is
+    evaluated at INSERT, and sampling the clock earlier would date the edit
+    before the record exists.
+    """
+    contact.updated_at = utcnow()
 
 
 def get_contact(db: Session, contact_id: int) -> Contact | None:
@@ -61,8 +84,10 @@ def list_contacts(
 
 def create_contact(db: Session, payload: ContactCreate) -> Contact:
     data = payload.model_dump()
+    data.pop("addresses")
     data["email"] = _normalize_email(data["email"])
     contact = Contact(**data)
+    _replace_addresses(contact, payload.addresses)
     db.add(contact)
     db.commit()
     db.refresh(contact)
@@ -70,16 +95,28 @@ def create_contact(db: Session, payload: ContactCreate) -> Contact:
 
 
 def replace_contact(db: Session, contact: Contact, payload: ContactReplace) -> Contact:
-    for field, value in payload.model_dump().items():
+    data = payload.model_dump()
+    data.pop("addresses")
+    for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
+    _replace_addresses(contact, payload.addresses)
+    _touch(contact)
     db.commit()
     db.refresh(contact)
     return contact
 
 
 def update_contact(db: Session, contact: Contact, payload: ContactUpdate) -> Contact:
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    # Presence, not value: an omitted `addresses` leaves the rows alone, while
+    # anything actually sent replaces them — `null` and `[]` alike clear the set.
+    replaces_addresses = "addresses" in data
+    data.pop("addresses", None)
+    for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
+    if replaces_addresses:
+        _replace_addresses(contact, payload.addresses or [])
+        _touch(contact)
     db.commit()
     db.refresh(contact)
     return contact

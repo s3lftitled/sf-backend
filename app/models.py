@@ -1,12 +1,22 @@
 from datetime import datetime, timezone
+from enum import Enum
 
-from sqlalchemy import DateTime, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
-def _utcnow() -> datetime:
+class AddressType(str, Enum):
+    """What a stored address is used for."""
+
+    HOME = "Home"
+    WORK = "Work"
+    OTHER = "Other"
+
+
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
@@ -23,22 +33,26 @@ class Contact(Base):
     company: Mapped[str | None] = mapped_column(String(200))
     job_title: Mapped[str | None] = mapped_column(String(200))
 
-    address: Mapped[str | None] = mapped_column(String(300))
-    city: Mapped[str | None] = mapped_column(String(120))
-    state: Mapped[str | None] = mapped_column(String(120))
-    postal_code: Mapped[str | None] = mapped_column(String(20))
-    country: Mapped[str | None] = mapped_column(String(120))
-
     notes: Mapped[str | None] = mapped_column(Text)
     photo: Mapped[str | None] = mapped_column(Text)
 
+    # selectin loading keeps a page of contacts to two queries rather than one
+    # per contact, and delete-orphan is what makes the addresses a true part of
+    # the contact rather than rows that outlive it.
+    addresses: Mapped[list["Address"]] = relationship(
+        back_populates="contact",
+        cascade="all, delete-orphan",
+        order_by="Address.id",
+        lazy="selectin",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utcnow,
-        onupdate=_utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         server_default=func.now(),
         nullable=False,
     )
@@ -49,3 +63,35 @@ class Contact(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Contact id={self.id} email={self.email!r}>"
+
+
+class Address(Base):
+    __tablename__ = "addresses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    type: Mapped[AddressType] = mapped_column(
+        # Stored as text rather than a native database enum, so adding a type
+        # later does not need a migration on Postgres.
+        SAEnum(
+            AddressType,
+            native_enum=False,
+            length=10,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        default=AddressType.HOME,
+        nullable=False,
+    )
+    street: Mapped[str | None] = mapped_column(String(300))
+    city: Mapped[str | None] = mapped_column(String(120))
+    state: Mapped[str | None] = mapped_column(String(120))
+    postal_code: Mapped[str | None] = mapped_column(String(20))
+    country: Mapped[str | None] = mapped_column(String(120))
+
+    contact: Mapped["Contact"] = relationship(back_populates="addresses")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Address id={self.id} contact_id={self.contact_id} type={self.type.value!r}>"

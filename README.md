@@ -107,9 +107,29 @@ also read):
 (case-insensitive). Everything else is optional.
 
 ```
-first_name, last_name, email, phone, company, job_title,
-address, city, state, postal_code, country, notes
+first_name, last_name, email, phone, photo, company, job_title,
+addresses, notes
 ```
+
+`addresses` is a list — a contact may have none, one, or many. Each entry has a
+`type` of `Home`, `Work`, or `Other` plus optional `street`, `city`, `state`,
+`postal_code`, and `country`:
+
+```json
+{
+  "first_name": "Ada",
+  "last_name": "Lovelace",
+  "email": "ada@example.com",
+  "addresses": [
+    {"type": "Work", "street": "1 Market St", "city": "San Francisco", "country": "USA"},
+    {"type": "Home", "city": "London", "country": "UK"}
+  ]
+}
+```
+
+`PUT` replaces the whole set. `PATCH` leaves it untouched unless `addresses` is
+sent, and sending `[]` or `null` removes every address. Stored addresses come
+back with an `id`.
 
 Responses add `id`, `full_name`, `created_at`, and `updated_at` (UTC).
 

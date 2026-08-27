@@ -1,5 +1,9 @@
 import base64
 
+from sqlalchemy import func, select
+
+from app.database import SessionLocal
+from app.models import Address
 from app.schemas import MAX_PHOTO_BYTES
 
 BASE = "/api/v1/contacts"
@@ -205,6 +209,93 @@ def test_patch_can_remove_photo(client, payload):
     response = client.patch(f"{BASE}/{contact_id}", json={"photo": None})
     assert response.status_code == 200
     assert response.json()["photo"] is None
+
+
+def test_create_contact_with_many_addresses(client, payload):
+    body = {
+        **payload,
+        "addresses": [
+            {"type": "Home", "street": "1 Home St", "city": "London", "country": "UK"},
+            {"type": "Work", "street": "1 Market St", "city": "San Francisco", "country": "USA"},
+            {"type": "Other", "city": "Paris", "country": "France"},
+        ],
+    }
+    response = client.post(BASE, json=body)
+    assert response.status_code == 201
+
+    addresses = response.json()["addresses"]
+    assert [address["type"] for address in addresses] == ["Home", "Work", "Other"]
+    assert all(address["id"] > 0 for address in addresses)
+
+
+def test_addresses_default_to_empty(client, payload):
+    body = {key: value for key, value in payload.items() if key != "addresses"}
+    assert client.post(BASE, json=body).json()["addresses"] == []
+
+
+def test_rejects_unknown_address_type(client, payload):
+    response = client.post(BASE, json={**payload, "addresses": [{"type": "Holiday"}]})
+    assert response.status_code == 422
+
+
+def test_put_replaces_the_whole_address_set(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.put(
+        f"{BASE}/{contact_id}",
+        json={**payload, "addresses": [{"type": "Home", "city": "Berlin"}]},
+    )
+    assert response.status_code == 200
+
+    addresses = response.json()["addresses"]
+    assert len(addresses) == 1
+    assert addresses[0]["city"] == "Berlin"
+
+
+def test_patch_without_addresses_keeps_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert len(response.json()["addresses"]) == 1
+
+
+def test_patch_with_empty_list_clears_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"addresses": []})
+    assert response.json()["addresses"] == []
+
+
+def test_new_contact_is_not_modified_before_it_is_created(client, payload):
+    created = client.post(BASE, json=payload).json()
+    assert created["updated_at"] >= created["created_at"]
+
+
+def test_address_only_patch_advances_updated_at(client, payload):
+    created = client.post(BASE, json=payload).json()
+    response = client.patch(
+        f"{BASE}/{created['id']}", json={"addresses": [{"type": "Work", "city": "Paris"}]}
+    )
+    assert response.json()["updated_at"] > created["updated_at"]
+
+
+def test_patch_with_null_addresses_clears_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"addresses": None})
+    assert response.json()["addresses"] == []
+
+
+def test_deleting_a_contact_deletes_its_addresses(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    assert client.delete(f"{BASE}/{contact_id}").status_code == 204
+
+    with SessionLocal() as db:
+        assert db.execute(select(func.count()).select_from(Address)).scalar_one() == 0
+
+
+def test_replacing_addresses_leaves_no_orphans(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    client.put(f"{BASE}/{contact_id}", json={**payload, "addresses": [{"type": "Home"}]})
+
+    with SessionLocal() as db:
+        assert db.execute(select(func.count()).select_from(Address)).scalar_one() == 1
 
 
 def test_root_lists_entrypoints(client):

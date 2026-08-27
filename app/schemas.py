@@ -18,26 +18,25 @@ PHOTO_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 MAX_PHOTO_BYTES = 1024 * 1024
 
 _PHOTO_DATA_URL = re.compile(
-    rf"data:(?:{'|'.join(re.escape(media) for media in PHOTO_MEDIA_TYPES)});base64,"
+    rf"data:(?P<media_type>{'|'.join(re.escape(media) for media in PHOTO_MEDIA_TYPES)});base64,"
     r"(?P<payload>[A-Za-z0-9+/]+={0,2})"
 )
 
 
-# The data URL's media type is a claim by the client; these are the headers the
-# supported formats actually start with.
-_IMAGE_SIGNATURES = (
-    bytes.fromhex("ffd8ff"),  # JPEG
-    bytes.fromhex("89504e470d0a1a0a"),  # PNG
-    b"GIF87a",
-    b"GIF89a",
-)
+# The data URL's media type is a claim by the client; these are the headers each
+# supported format actually starts with.
+_IMAGE_SIGNATURES = {
+    "image/jpeg": (bytes.fromhex("ffd8ff"),),
+    "image/png": (bytes.fromhex("89504e470d0a1a0a"),),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+}
 
 
-def _looks_like_image(data: bytes) -> bool:
-    if any(data.startswith(signature) for signature in _IMAGE_SIGNATURES):
-        return True
-    # WebP carries its marker after the RIFF chunk size rather than at byte zero.
-    return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+def _matches_media_type(data: bytes, media_type: str) -> bool:
+    if media_type == "image/webp":
+        # WebP puts its marker after the RIFF chunk size rather than at byte zero.
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return any(data.startswith(header) for header in _IMAGE_SIGNATURES[media_type])
 
 
 def _validate_photo(value: str | None) -> str | None:
@@ -59,8 +58,9 @@ def _validate_photo(value: str | None) -> str | None:
     except binascii.Error as exc:
         raise ValueError("Photo is not valid base64") from exc
 
-    if not _looks_like_image(decoded):
-        raise ValueError("Photo does not contain a JPEG, PNG, WebP, or GIF image")
+    media_type = match.group("media_type")
+    if not _matches_media_type(decoded, media_type):
+        raise ValueError(f"Photo bytes do not match the declared {media_type} type")
 
     return value
 

@@ -180,6 +180,12 @@ def test_rejects_bytes_that_are_not_an_image(client, payload):
     assert response.status_code == 422
 
 
+def test_rejects_photo_whose_bytes_contradict_its_media_type(client, payload):
+    gif_bytes = PHOTO.split(",", 1)[1]
+    response = client.post(BASE, json={**payload, "photo": f"data:image/png;base64,{gif_bytes}"})
+    assert response.status_code == 422
+
+
 def test_put_without_photo_clears_it(client, payload):
     contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
     response = client.put(f"{BASE}/{contact_id}", json=payload)

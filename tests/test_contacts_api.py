@@ -1,3 +1,7 @@
+import base64
+
+from app.schemas import MAX_PHOTO_BYTES
+
 BASE = "/api/v1/contacts"
 # 1x1 transparent GIF, the smallest thing that survives the data-URL validator.
 PHOTO = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
@@ -161,6 +165,18 @@ def test_create_rejects_non_image_photo(client, payload):
 def test_create_rejects_oversized_photo(client, payload):
     oversized = "data:image/png;base64," + "A" * (2 * 1024 * 1024)
     response = client.post(BASE, json={**payload, "photo": oversized})
+    assert response.status_code == 422
+
+
+def test_accepts_photo_at_the_size_limit(client, payload):
+    image = b"GIF89a" + bytes(MAX_PHOTO_BYTES - 6)
+    photo = "data:image/gif;base64," + base64.b64encode(image).decode()
+    assert client.post(BASE, json={**payload, "photo": photo}).status_code == 201
+
+
+def test_rejects_bytes_that_are_not_an_image(client, payload):
+    photo = "data:image/png;base64," + base64.b64encode(b"not an image").decode()
+    response = client.post(BASE, json={**payload, "photo": photo})
     assert response.status_code == 422
 
 

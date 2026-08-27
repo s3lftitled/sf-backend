@@ -23,6 +23,23 @@ _PHOTO_DATA_URL = re.compile(
 )
 
 
+# The data URL's media type is a claim by the client; these are the headers the
+# supported formats actually start with.
+_IMAGE_SIGNATURES = (
+    bytes.fromhex("ffd8ff"),  # JPEG
+    bytes.fromhex("89504e470d0a1a0a"),  # PNG
+    b"GIF87a",
+    b"GIF89a",
+)
+
+
+def _looks_like_image(data: bytes) -> bool:
+    if any(data.startswith(signature) for signature in _IMAGE_SIGNATURES):
+        return True
+    # WebP carries its marker after the RIFF chunk size rather than at byte zero.
+    return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
 def _validate_photo(value: str | None) -> str | None:
     if value is None:
         return None
@@ -32,14 +49,18 @@ def _validate_photo(value: str | None) -> str | None:
         raise ValueError(f"Photo must be a base64 data URL of type {', '.join(PHOTO_MEDIA_TYPES)}")
 
     payload = match.group("payload")
-    # Four base64 characters carry three bytes; check the encoded length first so
-    # an oversized payload is rejected without being decoded into memory.
-    if len(payload) // 4 * 3 > MAX_PHOTO_BYTES:
+    # Four base64 characters carry three bytes, less whatever the padding stands
+    # in for. Checked before decoding so an oversized payload is rejected without
+    # being expanded into memory.
+    if len(payload) // 4 * 3 - payload.count("=") > MAX_PHOTO_BYTES:
         raise ValueError(f"Photo must be {MAX_PHOTO_BYTES // 1024} KB or smaller")
     try:
-        base64.b64decode(payload, validate=True)
+        decoded = base64.b64decode(payload, validate=True)
     except binascii.Error as exc:
         raise ValueError("Photo is not valid base64") from exc
+
+    if not _looks_like_image(decoded):
+        raise ValueError("Photo does not contain a JPEG, PNG, WebP, or GIF image")
 
     return value
 

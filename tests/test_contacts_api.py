@@ -263,6 +263,20 @@ def test_patch_with_empty_list_clears_them(client, payload):
     assert response.json()["addresses"] == []
 
 
+def test_address_only_patch_advances_updated_at(client, payload):
+    created = client.post(BASE, json=payload).json()
+    response = client.patch(
+        f"{BASE}/{created['id']}", json={"addresses": [{"type": "Work", "city": "Paris"}]}
+    )
+    assert response.json()["updated_at"] > created["updated_at"]
+
+
+def test_patch_with_null_addresses_clears_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"addresses": None})
+    assert response.json()["addresses"] == []
+
+
 def test_deleting_a_contact_deletes_its_addresses(client, payload):
     contact_id = client.post(BASE, json=payload).json()["id"]
     assert client.delete(f"{BASE}/{contact_id}").status_code == 204

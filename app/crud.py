@@ -1,7 +1,7 @@
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Address, Contact
+from app.models import Address, Contact, utcnow
 from app.schemas import AddressCreate, ContactCreate, ContactReplace, ContactUpdate
 
 SORTABLE_FIELDS = ("id", "first_name", "last_name", "email", "company", "created_at", "updated_at")
@@ -17,8 +17,13 @@ def _replace_addresses(contact: Contact, addresses: list[AddressCreate]) -> None
 
     Assigning the whole collection lets delete-orphan remove the rows that are
     no longer referenced, so a contact never accumulates addresses it dropped.
+
+    Touching only the children leaves the parent row clean, so SQLAlchemy would
+    emit no UPDATE and `onupdate` would never fire — but an address change is a
+    change to the contact, so the timestamp is advanced here.
     """
     contact.addresses = [Address(**address.model_dump()) for address in addresses]
+    contact.updated_at = utcnow()
 
 
 def get_contact(db: Session, contact_id: int) -> Contact | None:
@@ -94,12 +99,13 @@ def replace_contact(db: Session, contact: Contact, payload: ContactReplace) -> C
 
 def update_contact(db: Session, contact: Contact, payload: ContactUpdate) -> Contact:
     data = payload.model_dump(exclude_unset=True)
-    # An omitted `addresses` leaves the existing rows alone; an explicit list —
-    # including an empty one — replaces them.
-    addresses = data.pop("addresses", None)
+    # Presence, not value: an omitted `addresses` leaves the rows alone, while
+    # anything actually sent replaces them — `null` and `[]` alike clear the set.
+    replaces_addresses = "addresses" in data
+    data.pop("addresses", None)
     for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
-    if addresses is not None:
+    if replaces_addresses:
         _replace_addresses(contact, payload.addresses or [])
     db.commit()
     db.refresh(contact)

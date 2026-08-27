@@ -1,6 +1,71 @@
+import base64
+import binascii
+import re
 from datetime import datetime, timezone
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+    field_validator,
+)
+
+PHOTO_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+MAX_PHOTO_BYTES = 1024 * 1024
+
+_PHOTO_DATA_URL = re.compile(
+    rf"data:(?P<media_type>{'|'.join(re.escape(media) for media in PHOTO_MEDIA_TYPES)});base64,"
+    r"(?P<payload>[A-Za-z0-9+/]+={0,2})"
+)
+
+
+# The data URL's media type is a claim by the client; these are the headers each
+# supported format actually starts with.
+_IMAGE_SIGNATURES = {
+    "image/jpeg": (bytes.fromhex("ffd8ff"),),
+    "image/png": (bytes.fromhex("89504e470d0a1a0a"),),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+}
+
+
+def _matches_media_type(data: bytes, media_type: str) -> bool:
+    if media_type == "image/webp":
+        # WebP puts its marker after the RIFF chunk size rather than at byte zero.
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return any(data.startswith(header) for header in _IMAGE_SIGNATURES[media_type])
+
+
+def _validate_photo(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    match = _PHOTO_DATA_URL.fullmatch(value)
+    if match is None:
+        raise ValueError(f"Photo must be a base64 data URL of type {', '.join(PHOTO_MEDIA_TYPES)}")
+
+    payload = match.group("payload")
+    # Four base64 characters carry three bytes, less whatever the padding stands
+    # in for. Checked before decoding so an oversized payload is rejected without
+    # being expanded into memory.
+    if len(payload) // 4 * 3 - payload.count("=") > MAX_PHOTO_BYTES:
+        raise ValueError(f"Photo must be {MAX_PHOTO_BYTES // 1024} KB or smaller")
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("Photo is not valid base64") from exc
+
+    media_type = match.group("media_type")
+    if not _matches_media_type(decoded, media_type):
+        raise ValueError(f"Photo bytes do not match the declared {media_type} type")
+
+    return value
+
+
+PhotoDataUrl = Annotated[str | None, AfterValidator(_validate_photo)]
 
 
 class ContactBase(BaseModel):
@@ -31,6 +96,14 @@ class ContactBase(BaseModel):
         max_length=40,
         description="Phone number. Stored verbatim — any format is accepted.",
         examples=["+1-415-555-0101"],
+    )
+    photo: PhotoDataUrl = Field(
+        default=None,
+        description=(
+            "Profile picture as a base64 `data:` URL (JPEG, PNG, WebP, or GIF), up to "
+            f"{MAX_PHOTO_BYTES // 1024} KB once decoded. Omit to fall back to the contact's initials."
+        ),
+        examples=["data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="],
     )
     company: str | None = Field(
         default=None,
@@ -126,6 +199,7 @@ class ContactUpdate(BaseModel):
         description="New email address. Must not belong to another contact.",
     )
     phone: str | None = Field(default=None, max_length=40, description="New phone number.")
+    photo: PhotoDataUrl = Field(default=None, description="New profile picture, or `null` to remove it.")
     company: str | None = Field(default=None, max_length=200, description="New company.")
     job_title: str | None = Field(default=None, max_length=200, description="New job title.")
     address: str | None = Field(default=None, max_length=300, description="New street address.")
